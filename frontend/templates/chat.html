@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多Agent智能客服 · LangGraph</title>
+<style>
+  :root { color-scheme: light; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f0f2f5; height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    background: #1a1a2e; color: #fff; padding: 14px 24px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  header h1 { font-size: 17px; font-weight: 600; }
+  header .badge { font-size: 12px; background: #4f6ef7; padding: 3px 10px; border-radius: 10px; }
+  .container { flex: 1; display: flex; overflow: hidden; }
+  .chat-panel { flex: 1; display: flex; flex-direction: column; background: #fff; }
+  .messages { flex: 1; overflow-y: auto; padding: 20px; }
+  .msg { margin-bottom: 16px; display: flex; }
+  .msg.user { justify-content: flex-end; }
+  .bubble {
+    max-width: 72%; padding: 10px 14px; border-radius: 12px;
+    line-height: 1.6; font-size: 14px; white-space: pre-wrap;
+  }
+  .msg.user .bubble { background: #4f6ef7; color: #fff; border-bottom-right-radius: 3px; }
+  .msg.bot .bubble { background: #f0f2f5; color: #222; border-bottom-left-radius: 3px; }
+  .agent-tag {
+    font-size: 11px; color: #888; margin-bottom: 4px;
+  }
+  .agent-tag .score { color: #22a06b; font-weight: 600; }
+  .input-bar {
+    display: flex; gap: 8px; padding: 14px 20px; border-top: 1px solid #e5e7eb;
+  }
+  .input-bar select, .input-bar input {
+    border: 1px solid #d1d5db; border-radius: 8px; padding: 10px 12px; font-size: 14px;
+  }
+  .input-bar input { flex: 1; }
+  .input-bar button {
+    background: #4f6ef7; color: #fff; border: none; border-radius: 8px;
+    padding: 10px 22px; font-size: 14px; cursor: pointer;
+  }
+  .input-bar button:disabled { background: #a5b4fc; cursor: not-allowed; }
+  .trace-panel {
+    width: 340px; background: #16162a; color: #cdd3e0; padding: 16px;
+    overflow-y: auto; font-size: 12px;
+  }
+  .trace-panel h2 { font-size: 13px; color: #8b93a8; margin-bottom: 10px; letter-spacing: 1px; }
+  .trace-item {
+    padding: 7px 10px; margin-bottom: 6px; border-radius: 6px;
+    background: #22223a; border-left: 3px solid #4f6ef7; line-height: 1.5;
+  }
+  .trace-item.qa-pass { border-left-color: #22a06b; }
+  .trace-item.qa-fail { border-left-color: #e5484d; }
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px; }
+  .meta-card { background: #22223a; border-radius: 6px; padding: 8px 10px; }
+  .meta-card .k { color: #8b93a8; font-size: 10px; }
+  .meta-card .v { color: #fff; font-size: 13px; margin-top: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>多Agent智能客服系统</h1>
+  <span class="badge">LangGraph · 智能路由 · RAG · QA质检</span>
+</header>
+<div class="container">
+  <div class="chat-panel">
+    <div class="messages" id="messages">
+      <div class="msg bot">
+        <div>
+          <div class="agent-tag">system</div>
+          <div class="bubble">您好！我是多Agent智能客服。请描述您的问题，系统会自动分析意图并路由到合适的专家Agent。</div>
+        </div>
+      </div>
+    </div>
+    <div class="input-bar">
+      <select id="priority">
+        <option value="low">低优先级</option>
+        <option value="medium" selected>中优先级</option>
+        <option value="high">高优先级</option>
+        <option value="urgent">紧急</option>
+      </select>
+      <input id="input" placeholder="输入您的问题…" onkeydown="if(event.key==='Enter')send()">
+      <button id="sendBtn" onclick="send()">发送</button>
+    </div>
+  </div>
+  <div class="trace-panel">
+    <h2>AGENT 执行轨迹</h2>
+    <div class="meta-grid" id="metaGrid" style="display:none">
+      <div class="meta-card"><div class="k">意图</div><div class="v" id="mIntent">-</div></div>
+      <div class="meta-card"><div class="k">情感</div><div class="v" id="mSentiment">-</div></div>
+      <div class="meta-card"><div class="k">生效优先级</div><div class="v" id="mPriority">-</div></div>
+      <div class="meta-card"><div class="k">QA得分</div><div class="v" id="mQa">-</div></div>
+    </div>
+    <div id="trace"><div class="trace-item">等待第一条消息…</div></div>
+  </div>
+</div>
+<script>
+const customerId = "customer_" + Math.random().toString(36).slice(2, 8);
+let conversationId = null;
+
+function addMsg(role, content, agentTag) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  wrap.innerHTML = role === "user"
+    ? `<div class="bubble"></div>`
+    : `<div><div class="agent-tag">${agentTag || ""}</div><div class="bubble"></div></div>`;
+  wrap.querySelector(".bubble").textContent = content;
+  const box = document.getElementById("messages");
+  box.appendChild(wrap);
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderTrace(trace, meta) {
+  const el = document.getElementById("trace");
+  el.innerHTML = "";
+  (trace || []).forEach(line => {
+    const div = document.createElement("div");
+    div.className = "trace-item";
+    if (line.includes("✓通过")) div.classList.add("qa-pass");
+    if (line.includes("✗不通过")) div.classList.add("qa-fail");
+    div.textContent = line;
+    el.appendChild(div);
+  });
+  if (meta) {
+    document.getElementById("metaGrid").style.display = "grid";
+    document.getElementById("mIntent").textContent = meta.intent || "-";
+    document.getElementById("mSentiment").textContent = meta.sentiment || "-";
+    document.getElementById("mPriority").textContent = meta.effective_priority || "-";
+    document.getElementById("mQa").textContent = meta.qa_score != null ? meta.qa_score.toFixed(1) + " / 10" : "-";
+  }
+}
+
+async function send() {
+  const input = document.getElementById("input");
+  const btn = document.getElementById("sendBtn");
+  const text = input.value.trim();
+  if (!text) return;
+  addMsg("user", text);
+  input.value = "";
+  btn.disabled = true;
+  btn.textContent = "处理中…";
+  try {
+    const res = await fetch("/api/support/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customer_id: customerId,
+        message: text,
+        conversation_id: conversationId,
+        priority: document.getElementById("priority").value,
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    const data = await res.json();
+    conversationId = data.conversation_id;
+    const tag = `${data.agent}${data.metadata?.qa_score != null ? ` · <span class="score">QA ${data.metadata.qa_score.toFixed(1)}</span>` : ""}`;
+    addMsg("bot", data.response, "");
+    const lastTag = document.querySelector("#messages .msg.bot:last-child .agent-tag");
+    if (lastTag) lastTag.innerHTML = tag;
+    renderTrace(data.trace, data.metadata);
+  } catch (e) {
+    addMsg("bot", "请求失败：" + e.message, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "发送";
+  }
+}
+</script>
+</body>
+</html>
