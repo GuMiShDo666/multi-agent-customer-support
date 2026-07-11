@@ -197,6 +197,7 @@ main.py                     # Uvicorn entry point
 requirements.txt
 tests/
   test_routing_and_rag.py   # Routing and BM25 tests
+  test_workflow_and_service.py # Graph, service, transaction, and API tests
 ```
 
 ## Validation
@@ -208,11 +209,12 @@ python3 -m compileall -q .
 pytest tests/ -v
 ```
 
-`pytest tests/ -v` does not require an API key because it covers deterministic routing and BM25 retrieval logic. Full CLI or web workflow execution requires a configured LLM API key.
+`pytest tests/ -v` does not require an API key. It covers routing, BM25 retrieval, graph compilation, structured-output failure handling, resource ownership, transaction rollback, request validation, and API error responses. External LLM calls are replaced with local test doubles. Full CLI or web workflow execution still requires a configured LLM API key.
 
 ## Notes
 
 - The project is a reproducible customer support automation demo, not a hosted production service.
+- Direct dependencies are pinned in `requirements.txt` to keep the LangGraph and LangChain runtime reproducible.
 - The default database is local SQLite: `customer_support.db`.
 - Generated database files, `.env`, caches, and virtual environments should stay out of Git.
 - The included FAQ corpus is example support content; replace it with your own product documentation for real usage.

@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import declarative_base
@@ -46,6 +46,8 @@ class TicketDB(Base):
 
 
 class Ticket(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: Optional[int] = None
     customer_id: str
     subject: str
@@ -58,14 +60,12 @@ class Ticket(BaseModel):
     resolved_at: Optional[datetime] = None
     resolution: Optional[str] = None
 
-    class Config:
-        from_attributes = True
-
-
 class TicketCreate(BaseModel):
-    customer_id: str
-    subject: str
-    description: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    customer_id: str = Field(min_length=1, max_length=128)
+    subject: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=10000)
     priority: TicketPriority = TicketPriority.MEDIUM
 
 

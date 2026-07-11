@@ -14,7 +14,9 @@ class TicketService:
     """工单管理服务。"""
 
     @staticmethod
-    def create_ticket(db: Session, ticket_data: TicketCreate) -> Ticket:
+    def create_ticket(
+        db: Session, ticket_data: TicketCreate, *, commit: bool = True
+    ) -> Ticket:
         db_ticket = TicketDB(
             customer_id=ticket_data.customer_id,
             subject=ticket_data.subject,
@@ -23,7 +25,10 @@ class TicketService:
             status=TicketStatus.OPEN,
         )
         db.add(db_ticket)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(db_ticket)
         return Ticket.model_validate(db_ticket)
 
@@ -46,7 +51,11 @@ class TicketService:
 
     @staticmethod
     def update_ticket(
-        db: Session, ticket_id: int, ticket_update: TicketUpdate
+        db: Session,
+        ticket_id: int,
+        ticket_update: TicketUpdate,
+        *,
+        commit: bool = True,
     ) -> Optional[Ticket]:
         db_ticket = db.query(TicketDB).filter(TicketDB.id == ticket_id).first()
         if not db_ticket:
@@ -67,7 +76,10 @@ class TicketService:
             db_ticket.resolution = ticket_update.resolution
 
         db_ticket.updated_at = datetime.utcnow()
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(db_ticket)
         return Ticket.model_validate(db_ticket)
 

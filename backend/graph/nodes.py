@@ -15,10 +15,10 @@ LangGraph 工作流节点实现。
 """
 
 import json
-import re
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field, ValidationError
 
 from ..config import QA_THRESHOLD, RAG_TOP_K
 from ..llm import create_llm
@@ -30,14 +30,30 @@ from .state import SupportState
 # ---------------------------------------------------------------------------
 
 
-def _parse_json(text: str) -> Dict[str, Any]:
-    """从LLM输出中提取JSON（容忍```json代码块包裹）。"""
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            pass
+class IntentClassification(BaseModel):
+    intent: Literal["general", "technical", "billing", "complaint"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    sentiment: Literal["positive", "neutral", "negative", "angry"]
+    predicted_priority: Literal["low", "medium", "high", "urgent"]
+
+
+class QAEvaluation(BaseModel):
+    score: float = Field(ge=0.0, le=10.0)
+    feedback: str = Field(min_length=1, max_length=2000)
+
+
+def _parse_json(text: Any) -> Dict[str, Any]:
+    """提取第一个完整JSON对象，容忍代码块或前后说明文字。"""
+    if not isinstance(text, str):
+        return {}
+    start = text.find("{")
+    if start < 0:
+        return {}
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text[start:])
+        return value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        pass
     return {}
 
 
@@ -109,25 +125,39 @@ def classify_intent(state: SupportState) -> Dict[str, Any]:
 - 客户情绪angry或提及"投诉/退款/紧急"时 predicted_priority 至少为 high"""
 
     result = llm.invoke([HumanMessage(content=prompt)])
-    parsed = _parse_json(result.content)
-
-    intent = parsed.get("intent", "general")
-    sentiment = parsed.get("sentiment", "neutral")
-    predicted = parsed.get("predicted_priority", state.get("priority", "medium"))
-
-    # 取用户声明优先级与LLM预测优先级中较高者
     order = ["low", "medium", "high", "urgent"]
     declared = state.get("priority", "medium")
+    if declared not in order:
+        declared = "medium"
+
+    try:
+        classification = IntentClassification.model_validate(
+            _parse_json(result.content)
+        )
+        intent = classification.intent
+        confidence = classification.confidence
+        sentiment = classification.sentiment
+        predicted = classification.predicted_priority
+        classification_note = ""
+    except ValidationError:
+        # 分类器不可用时不应把潜在紧急问题降级为普通咨询。
+        intent = "general"
+        confidence = 0.0
+        sentiment = "neutral"
+        predicted = max(declared, "high", key=order.index)
+        classification_note = ", 结构化输出无效，已按高优先级升级"
+
+    # 取用户声明优先级与LLM预测优先级中较高者
     effective = max(declared, predicted, key=lambda p: order.index(p) if p in order else 1)
 
     return {
         "intent": intent,
-        "intent_confidence": float(parsed.get("confidence", 0.5)),
+        "intent_confidence": confidence,
         "sentiment": sentiment,
         "predicted_priority": effective,
         "trace": [
             f"[classify_intent] 意图={intent}, 情感={sentiment}, "
-            f"声明优先级={declared} → 生效优先级={effective}"
+            f"声明优先级={declared} → 生效优先级={effective}{classification_note}"
         ],
     }
 
@@ -321,10 +351,13 @@ def qa_check(state: SupportState) -> Dict[str, Any]:
 {{"score": 0.0到10.0, "feedback": "具体改进意见（如果满分则写'通过'）"}}"""
 
     result = llm.invoke([HumanMessage(content=prompt)])
-    parsed = _parse_json(result.content)
-
-    score = float(parsed.get("score", 8.0))
-    feedback = parsed.get("feedback", "通过")
+    try:
+        evaluation = QAEvaluation.model_validate(_parse_json(result.content))
+        score = evaluation.score
+        feedback = evaluation.feedback
+    except ValidationError:
+        score = 0.0
+        feedback = "质检结构化输出解析失败，按不通过处理"
     passed = score >= QA_THRESHOLD
 
     return {
