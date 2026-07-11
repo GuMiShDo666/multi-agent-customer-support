@@ -21,11 +21,18 @@ class ConversationService:
 
     @staticmethod
     def create_conversation(
-        db: Session, customer_id: str, ticket_id: Optional[int] = None
+        db: Session,
+        customer_id: str,
+        ticket_id: Optional[int] = None,
+        *,
+        commit: bool = True,
     ) -> Conversation:
         db_conv = ConversationDB(customer_id=customer_id, ticket_id=ticket_id)
         db.add(db_conv)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(db_conv)
         return Conversation.model_validate(db_conv)
 
@@ -58,7 +65,9 @@ class ConversationService:
         return conv
 
     @staticmethod
-    def add_message(db: Session, message_data: MessageCreate) -> Message:
+    def add_message(
+        db: Session, message_data: MessageCreate, *, commit: bool = True
+    ) -> Message:
         db_message = MessageDB(
             conversation_id=message_data.conversation_id,
             role=message_data.role,
@@ -78,7 +87,10 @@ class ConversationService:
         if db_conv:
             db_conv.updated_at = datetime.utcnow()
 
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(db_message)
         return Message.model_validate(db_message)
 

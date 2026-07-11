@@ -5,7 +5,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
@@ -44,6 +44,8 @@ class MessageDB(Base):
 
 
 class Message(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: Optional[int] = None
     conversation_id: Optional[int] = None
     role: str
@@ -54,21 +56,15 @@ class Message(BaseModel):
     qa_score: Optional[float] = None
     created_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
-
-
 class Conversation(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: Optional[int] = None
     ticket_id: Optional[int] = None
     customer_id: str
     messages: List[Message] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
 
 class MessageCreate(BaseModel):
     conversation_id: int

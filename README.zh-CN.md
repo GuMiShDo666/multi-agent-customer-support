@@ -197,6 +197,7 @@ main.py                     # Uvicorn 服务入口
 requirements.txt
 tests/
   test_routing_and_rag.py   # 路由和 BM25 测试
+  test_workflow_and_service.py # 状态图、服务、事务和 API 测试
 ```
 
 ## 验证
@@ -208,11 +209,12 @@ python3 -m compileall -q .
 pytest tests/ -v
 ```
 
-`pytest tests/ -v` 不需要 API Key，因为它只覆盖确定性的路由逻辑和 BM25 检索逻辑。完整 CLI 或 Web 流程需要配置 LLM API Key。
+`pytest tests/ -v` 不需要 API Key。测试覆盖路由、BM25 检索、状态图编译、结构化输出失败处理、资源归属、事务回滚、请求校验和 API 错误响应；外部 LLM 调用使用本地测试替身。完整 CLI 或 Web 流程仍然需要配置 LLM API Key。
 
 ## 说明
 
 - 这是一个可复现的客服自动化项目，不是已经托管上线的生产服务。
+- `requirements.txt` 固定了直接依赖版本，以保证 LangGraph 和 LangChain 运行环境可复现。
 - 默认数据库是本地 SQLite：`customer_support.db`。
 - 生成的数据库文件、`.env`、缓存和虚拟环境不应提交到 Git。
 - 当前 FAQ 语料是示例内容；真实使用时应替换为自己的产品文档或客服知识库。

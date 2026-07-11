@@ -9,19 +9,24 @@ FastAPI 主应用 — LangGraph 多Agent智能客服系统。
 
 import os
 from contextlib import asynccontextmanager
+from threading import Lock
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from ..database.database import get_db, init_db
 from ..models.conversation import Conversation
 from ..models.ticket import Ticket, TicketCreate, TicketPriority, TicketUpdate
 from ..services.conversation_service import ConversationService
-from ..services.support_service import SupportService
+from ..services.support_service import (
+    SupportAccessDenied,
+    SupportResourceNotFound,
+    SupportService,
+)
 from ..services.ticket_service import TicketService
 
 
@@ -48,13 +53,26 @@ app.add_middleware(
 
 # 懒加载支持服务（首次请求时才编译图/初始化LLM客户端）
 _support_service: Optional[SupportService] = None
+_support_service_lock = Lock()
 
 
 def get_support_service() -> SupportService:
     global _support_service
     if _support_service is None:
-        _support_service = SupportService()
+        with _support_service_lock:
+            if _support_service is None:
+                _support_service = SupportService()
     return _support_service
+
+
+def _support_http_exception(exc: Exception) -> HTTPException:
+    if isinstance(exc, SupportResourceNotFound):
+        return HTTPException(status_code=404, detail="Requested resource was not found")
+    if isinstance(exc, SupportAccessDenied):
+        return HTTPException(status_code=403, detail="Resource access denied")
+    return HTTPException(
+        status_code=503, detail="Support service is temporarily unavailable"
+    )
 
 
 # ===== 基础端点 =====
@@ -74,17 +92,17 @@ async def health_check():
 
 
 @app.post("/api/tickets", response_model=Ticket)
-async def create_ticket(ticket: TicketCreate, db: Session = Depends(get_db)):
+def create_ticket(ticket: TicketCreate, db: Session = Depends(get_db)):
     return TicketService.create_ticket(db, ticket)
 
 
 @app.get("/api/tickets", response_model=List[Ticket])
-async def get_tickets(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def get_tickets(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return TicketService.get_all_tickets(db, skip=skip, limit=limit)
 
 
 @app.get("/api/tickets/{ticket_id}", response_model=Ticket)
-async def get_ticket(ticket_id: int, db: Session = Depends(get_db)):
+def get_ticket(ticket_id: int, db: Session = Depends(get_db)):
     ticket = TicketService.get_ticket(db, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
@@ -92,12 +110,12 @@ async def get_ticket(ticket_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/tickets/customer/{customer_id}", response_model=List[Ticket])
-async def get_customer_tickets(customer_id: str, db: Session = Depends(get_db)):
+def get_customer_tickets(customer_id: str, db: Session = Depends(get_db)):
     return TicketService.get_tickets_by_customer(db, customer_id)
 
 
 @app.patch("/api/tickets/{ticket_id}", response_model=Ticket)
-async def update_ticket(
+def update_ticket(
     ticket_id: int, ticket_update: TicketUpdate, db: Session = Depends(get_db)
 ):
     ticket = TicketService.update_ticket(db, ticket_id, ticket_update)
@@ -107,7 +125,7 @@ async def update_ticket(
 
 
 @app.delete("/api/tickets/{ticket_id}")
-async def delete_ticket(ticket_id: int, db: Session = Depends(get_db)):
+def delete_ticket(ticket_id: int, db: Session = Depends(get_db)):
     if not TicketService.delete_ticket(db, ticket_id):
         raise HTTPException(status_code=404, detail="Ticket not found")
     return {"message": "Ticket deleted successfully"}
@@ -117,14 +135,22 @@ async def delete_ticket(ticket_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/conversations", response_model=Conversation)
-async def create_conversation(
-    customer_id: str, ticket_id: Optional[int] = None, db: Session = Depends(get_db)
+def create_conversation(
+    customer_id: str = Query(min_length=1, max_length=128),
+    ticket_id: Optional[int] = None,
+    db: Session = Depends(get_db),
 ):
+    if ticket_id:
+        ticket = TicketService.get_ticket(db, ticket_id)
+        if not ticket:
+            raise HTTPException(status_code=404, detail="Ticket not found")
+        if ticket.customer_id != customer_id:
+            raise HTTPException(status_code=403, detail="Resource access denied")
     return ConversationService.create_conversation(db, customer_id, ticket_id)
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=Conversation)
-async def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
+def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
     conversation = ConversationService.get_conversation(db, conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -132,7 +158,7 @@ async def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/conversations/ticket/{ticket_id}", response_model=Conversation)
-async def get_conversation_by_ticket(ticket_id: int, db: Session = Depends(get_db)):
+def get_conversation_by_ticket(ticket_id: int, db: Session = Depends(get_db)):
     conversation = ConversationService.get_conversation_by_ticket(db, ticket_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -143,15 +169,17 @@ async def get_conversation_by_ticket(ticket_id: int, db: Session = Depends(get_d
 
 
 class MessageRequest(BaseModel):
-    customer_id: str
-    message: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    customer_id: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=10000)
     conversation_id: Optional[int] = None
     ticket_id: Optional[int] = None
-    priority: str = "medium"
+    priority: TicketPriority = TicketPriority.MEDIUM
 
 
 @app.post("/api/support/message")
-async def handle_message(request: MessageRequest, db: Session = Depends(get_db)):
+def handle_message(request: MessageRequest, db: Session = Depends(get_db)):
     """
     处理客户消息 — 执行 LangGraph 多Agent工作流。
 
@@ -169,51 +197,59 @@ async def handle_message(request: MessageRequest, db: Session = Depends(get_db))
             message=request.message,
             conversation_id=request.conversation_id,
             ticket_id=request.ticket_id,
-            priority=request.priority,
+            priority=request.priority.value,
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        db.rollback()
+        raise _support_http_exception(exc) from exc
 
 
 class TicketMessageRequest(BaseModel):
-    customer_id: str
-    subject: str
-    description: str
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    customer_id: str = Field(min_length=1, max_length=128)
+    subject: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=10000)
     priority: TicketPriority = TicketPriority.MEDIUM
 
 
 @app.post("/api/support/ticket")
-async def create_ticket_and_start_conversation(
+def create_ticket_and_start_conversation(
     request: TicketMessageRequest, db: Session = Depends(get_db)
 ):
     """创建工单并开始对话。"""
-    ticket = TicketService.create_ticket(
-        db,
-        TicketCreate(
+    try:
+        ticket = TicketService.create_ticket(
+            db,
+            TicketCreate(
+                customer_id=request.customer_id,
+                subject=request.subject,
+                description=request.description,
+                priority=request.priority,
+            ),
+            commit=False,
+        )
+
+        service = get_support_service()
+        result = service.handle_customer_message(
+            db=db,
             customer_id=request.customer_id,
-            subject=request.subject,
-            description=request.description,
-            priority=request.priority,
-        ),
-    )
-
-    service = get_support_service()
-    result = service.handle_customer_message(
-        db=db,
-        customer_id=request.customer_id,
-        message=request.description,
-        ticket_id=ticket.id,
-        priority=request.priority.value,
-    )
-
-    return {"ticket": ticket, "conversation": result}
+            message=request.description,
+            ticket_id=ticket.id,
+            priority=request.priority.value,
+        )
+        updated_ticket = TicketService.get_ticket(db, ticket.id)
+        return {"ticket": updated_ticket, "conversation": result}
+    except Exception as exc:
+        db.rollback()
+        raise _support_http_exception(exc) from exc
 
 
 # ===== 前端页面 =====
 
 
 @app.get("/chat", response_class=HTMLResponse)
-async def chat_page():
+def chat_page():
     """聊天界面（含Agent执行轨迹可视化）。"""
     html_path = os.path.join(
         os.path.dirname(__file__), "../../frontend/templates/chat.html"

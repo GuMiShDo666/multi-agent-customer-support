@@ -9,17 +9,27 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
-from ..graph import build_support_graph
 from ..models.conversation import MessageCreate
 from ..models.ticket import TicketStatus, TicketUpdate
 from .conversation_service import ConversationService
 from .ticket_service import TicketService
 
 
+class SupportResourceNotFound(Exception):
+    """请求引用的客服资源不存在。"""
+
+
+class SupportAccessDenied(Exception):
+    """客户无权访问请求引用的客服资源。"""
+
+
 class SupportService:
     """基于 LangGraph 多Agent工作流的客服服务。"""
 
     def __init__(self):
+        # 延迟导入重量级 LangGraph 依赖，API 启动和健康检查无需等待状态图加载。
+        from ..graph import build_support_graph
+
         # 图只编译一次，可重复调用（无状态，状态由每次invoke的输入携带）
         self.graph = build_support_graph()
 
@@ -35,61 +45,110 @@ class SupportService:
         """
         处理客户消息：持久化 → 执行状态图 → 持久化回复 → 返回结果+执行轨迹。
         """
-        # 1. 获取或创建对话
-        if conversation_id:
-            conversation = ConversationService.get_conversation(db, conversation_id)
-        elif ticket_id:
-            conversation = ConversationService.get_conversation_by_ticket(db, ticket_id)
-            if not conversation:
-                conversation = ConversationService.create_conversation(
-                    db, customer_id, ticket_id
+        try:
+            ticket = None
+            resolved_ticket_id = ticket_id
+
+            if ticket_id:
+                ticket = TicketService.get_ticket(db, ticket_id)
+                if not ticket:
+                    raise SupportResourceNotFound("Ticket not found")
+                if ticket.customer_id != customer_id:
+                    raise SupportAccessDenied(
+                        "Ticket does not belong to this customer"
+                    )
+
+            # 1. 获取或创建对话，并验证资源归属和关联关系
+            if conversation_id:
+                conversation = ConversationService.get_conversation(
+                    db, conversation_id
                 )
-        else:
-            conversation = ConversationService.create_conversation(
-                db, customer_id, ticket_id
+                if not conversation:
+                    raise SupportResourceNotFound("Conversation not found")
+                if conversation.customer_id != customer_id:
+                    raise SupportAccessDenied(
+                        "Conversation does not belong to this customer"
+                    )
+                if ticket_id and conversation.ticket_id != ticket_id:
+                    raise SupportAccessDenied(
+                        "Conversation is not associated with the supplied ticket"
+                    )
+                if not ticket_id and conversation.ticket_id:
+                    resolved_ticket_id = conversation.ticket_id
+                    ticket = TicketService.get_ticket(db, resolved_ticket_id)
+                    if not ticket:
+                        raise SupportResourceNotFound("Associated ticket not found")
+                    if ticket.customer_id != customer_id:
+                        raise SupportAccessDenied(
+                            "Associated ticket does not belong to this customer"
+                        )
+            elif ticket_id:
+                conversation = ConversationService.get_conversation_by_ticket(
+                    db, ticket_id
+                )
+                if conversation and conversation.customer_id != customer_id:
+                    raise SupportAccessDenied(
+                        "Conversation does not belong to this customer"
+                    )
+                if not conversation:
+                    conversation = ConversationService.create_conversation(
+                        db, customer_id, ticket_id, commit=False
+                    )
+            else:
+                conversation = ConversationService.create_conversation(
+                    db, customer_id, commit=False
+                )
+
+            # 工单优先级不能被请求中的较低优先级覆盖
+            if ticket:
+                order = ["low", "medium", "high", "urgent"]
+                priority = max(
+                    priority,
+                    ticket.priority.value,
+                    key=lambda value: order.index(value),
+                )
+
+            # 2. 暂存客户消息，不在工作流完成前提交
+            ConversationService.add_message(
+                db,
+                MessageCreate(
+                    conversation_id=conversation.id, role="user", content=message
+                ),
+                commit=False,
             )
 
-        # 2. 保存客户消息
-        ConversationService.add_message(
-            db,
-            MessageCreate(
-                conversation_id=conversation.id, role="user", content=message
-            ),
-        )
+            # 3. 构建上下文
+            history = self._build_history(db, conversation.id)
+            ticket_info = self._build_ticket_info(db, resolved_ticket_id)
 
-        # 3. 构建上下文
-        history = self._build_history(db, conversation.id)
-        ticket_info = self._build_ticket_info(db, ticket_id)
+            # 4. 执行 LangGraph 状态图
+            result = self.graph.invoke(
+                {
+                    "customer_id": customer_id,
+                    "message": message,
+                    "priority": priority,
+                    "conversation_history": history,
+                    "ticket_info": ticket_info,
+                }
+            )
 
-        # 4. 执行 LangGraph 状态图
-        result = self.graph.invoke(
-            {
-                "customer_id": customer_id,
-                "message": message,
-                "priority": priority,
-                "conversation_history": history,
-                "ticket_info": ticket_info,
-            }
-        )
+            # 5. 暂存Agent回复（含执行元数据）
+            ConversationService.add_message(
+                db,
+                MessageCreate(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=result["final_response"],
+                    agent_name=result.get("handled_by"),
+                    intent=result.get("intent"),
+                    sentiment=result.get("sentiment"),
+                    qa_score=result.get("qa_score"),
+                ),
+                commit=False,
+            )
 
-        # 5. 保存Agent回复（含执行元数据）
-        ConversationService.add_message(
-            db,
-            MessageCreate(
-                conversation_id=conversation.id,
-                role="assistant",
-                content=result["final_response"],
-                agent_name=result.get("handled_by"),
-                intent=result.get("intent"),
-                sentiment=result.get("sentiment"),
-                qa_score=result.get("qa_score"),
-            ),
-        )
-
-        # 6. 更新工单状态
-        if ticket_id:
-            ticket = TicketService.get_ticket(db, ticket_id)
-            if ticket:
+            # 6. 更新工单状态
+            if resolved_ticket_id and ticket:
                 new_status = None
                 if result.get("handled_by") == "escalation_agent":
                     new_status = TicketStatus.ESCALATED
@@ -98,32 +157,37 @@ class SupportService:
                 if new_status:
                     TicketService.update_ticket(
                         db,
-                        ticket_id,
+                        resolved_ticket_id,
                         TicketUpdate(
                             status=new_status,
                             assigned_agent=result.get("handled_by"),
                         ),
+                        commit=False,
                     )
 
-        # 7. 返回结果 + 完整可观测性数据
-        return {
-            "conversation_id": conversation.id,
-            "response": result["final_response"],
-            "agent": result.get("handled_by"),
-            "agents_used": result.get("agents_used", []),
-            "metadata": {
-                "intent": result.get("intent"),
-                "intent_confidence": result.get("intent_confidence"),
-                "sentiment": result.get("sentiment"),
-                "effective_priority": result.get("predicted_priority"),
-                "qa_score": result.get("qa_score"),
-                "retry_count": result.get("retry_count"),
-                "retrieved_docs": [
-                    d["title"] for d in result.get("retrieved_docs", [])
-                ],
-            },
-            "trace": result.get("trace", []),
-        }
+            # 7. 工作流成功后一次性提交所有数据库变更
+            db.commit()
+            return {
+                "conversation_id": conversation.id,
+                "response": result["final_response"],
+                "agent": result.get("handled_by"),
+                "agents_used": result.get("agents_used", []),
+                "metadata": {
+                    "intent": result.get("intent"),
+                    "intent_confidence": result.get("intent_confidence"),
+                    "sentiment": result.get("sentiment"),
+                    "effective_priority": result.get("predicted_priority"),
+                    "qa_score": result.get("qa_score"),
+                    "retry_count": result.get("retry_count"),
+                    "retrieved_docs": [
+                        d["title"] for d in result.get("retrieved_docs", [])
+                    ],
+                },
+                "trace": result.get("trace", []),
+            }
+        except Exception:
+            db.rollback()
+            raise
 
     def _build_history(self, db: Session, conversation_id: int) -> list:
         """构建对话历史（排除刚保存的当前消息）。"""
