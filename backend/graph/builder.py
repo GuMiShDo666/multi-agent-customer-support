@@ -25,7 +25,6 @@ def build_support_graph():
     """构建并编译客服多Agent状态图。"""
     graph = StateGraph(SupportState)
 
-    # 注册节点
     graph.add_node("intake", nodes.intake)
     graph.add_node("classify_intent", nodes.classify_intent)
     graph.add_node("retrieve_knowledge", nodes.retrieve_knowledge)
@@ -35,12 +34,10 @@ def build_support_graph():
     graph.add_node("qa_check", nodes.qa_check)
     graph.add_node("finalize", nodes.finalize)
 
-    # 主干边
     graph.set_entry_point("intake")
     graph.add_edge("intake", "classify_intent")
     graph.add_edge("classify_intent", "retrieve_knowledge")
 
-    # 智能路由（条件分支）
     graph.add_conditional_edges(
         "retrieve_knowledge",
         route_to_agent,
@@ -51,12 +48,10 @@ def build_support_graph():
         },
     )
 
-    # 所有Agent → QA质检
     graph.add_edge("support_agent", "qa_check")
     graph.add_edge("technical_agent", "qa_check")
     graph.add_edge("escalation_agent", "qa_check")
 
-    # QA后路由（重试循环 或 输出）
     graph.add_conditional_edges(
         "qa_check",
         route_after_qa,

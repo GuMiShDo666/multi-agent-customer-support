@@ -1,6 +1,4 @@
-"""
-工单管理服务（沿用原项目设计）。
-"""
+"""工单持久化服务。"""
 
 from datetime import datetime
 from typing import List, Optional

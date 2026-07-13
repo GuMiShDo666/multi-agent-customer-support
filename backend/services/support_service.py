@@ -1,9 +1,4 @@
-"""
-支持服务 — 将 LangGraph 状态图与数据库持久化层集成。
-
-这是原项目 SupportService 的 LangGraph 版：
-原来调用 CrewManager.process_inquiry()，现在调用编译好的状态图 graph.invoke()。
-"""
+"""将客服状态图与对话、工单持久化集成。"""
 
 from typing import Any, Dict, Optional
 
@@ -58,7 +53,7 @@ class SupportService:
                         "Ticket does not belong to this customer"
                     )
 
-            # 1. 获取或创建对话，并验证资源归属和关联关系
+            # 获取对话前必须验证客户和工单归属。
             if conversation_id:
                 conversation = ConversationService.get_conversation(
                     db, conversation_id
@@ -108,7 +103,7 @@ class SupportService:
                     key=lambda value: order.index(value),
                 )
 
-            # 2. 暂存客户消息，不在工作流完成前提交
+            # 工作流完成前不提交消息，失败时统一回滚。
             ConversationService.add_message(
                 db,
                 MessageCreate(
@@ -117,11 +112,9 @@ class SupportService:
                 commit=False,
             )
 
-            # 3. 构建上下文
             history = self._build_history(db, conversation.id)
             ticket_info = self._build_ticket_info(db, resolved_ticket_id)
 
-            # 4. 执行 LangGraph 状态图
             result = self.graph.invoke(
                 {
                     "customer_id": customer_id,
@@ -132,7 +125,6 @@ class SupportService:
                 }
             )
 
-            # 5. 暂存Agent回复（含执行元数据）
             ConversationService.add_message(
                 db,
                 MessageCreate(
@@ -147,7 +139,6 @@ class SupportService:
                 commit=False,
             )
 
-            # 6. 更新工单状态
             if resolved_ticket_id and ticket:
                 new_status = None
                 if result.get("handled_by") == "escalation_agent":
@@ -165,7 +156,7 @@ class SupportService:
                         commit=False,
                     )
 
-            # 7. 工作流成功后一次性提交所有数据库变更
+            # 用户消息、Agent回复和工单状态必须原子提交。
             db.commit()
             return {
                 "conversation_id": conversation.id,

@@ -1,3 +1,3 @@
-"""Multi-Agent Customer Support System — LangGraph 重构版本."""
+"""Multi-Agent Customer Support backend."""
 
 __version__ = "2.0.0"

@@ -11,15 +11,15 @@ try:
 except ImportError:  # dotenv未安装时直接读环境变量
     pass
 
-# ===== LLM 配置（OpenAI兼容接口） =====
+# OpenAI兼容接口
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 
-# ===== 数据库 =====
+# 数据库
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./customer_support.db")
 
-# ===== 工作流参数 =====
+# 工作流参数
 # QA质检阈值（0-10分），低于该分触发重新生成
 QA_THRESHOLD = float(os.getenv("QA_THRESHOLD", "7.0"))
 # QA不通过时的最大重试次数

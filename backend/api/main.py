@@ -1,11 +1,4 @@
-"""
-FastAPI 主应用 — LangGraph 多Agent智能客服系统。
-
-相比原项目的改进：
-- 移除了原项目对 FastAPI build_middleware_stack 的 monkey-patch（不再需要）
-- 使用 lifespan 替代已弃用的 on_event
-- /api/support/message 返回完整的执行轨迹（trace）和元数据，前端可视化Agent协作过程
-"""
+"""FastAPI 应用，提供工单、对话、支持工作流和聊天页面接口。"""
 
 import os
 from contextlib import asynccontextmanager
@@ -75,9 +68,6 @@ def _support_http_exception(exc: Exception) -> HTTPException:
     )
 
 
-# ===== 基础端点 =====
-
-
 @app.get("/")
 async def root():
     return {"message": "Multi-Agent Customer Support API (LangGraph)", "version": "2.0.0"}
@@ -86,9 +76,6 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
-
-
-# ===== 工单端点 =====
 
 
 @app.post("/api/tickets", response_model=Ticket)
@@ -131,9 +118,6 @@ def delete_ticket(ticket_id: int, db: Session = Depends(get_db)):
     return {"message": "Ticket deleted successfully"}
 
 
-# ===== 对话端点 =====
-
-
 @app.post("/api/conversations", response_model=Conversation)
 def create_conversation(
     customer_id: str = Query(min_length=1, max_length=128),
@@ -165,9 +149,6 @@ def get_conversation_by_ticket(ticket_id: int, db: Session = Depends(get_db)):
     return conversation
 
 
-# ===== 支持端点（核心） =====
-
-
 class MessageRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -180,15 +161,7 @@ class MessageRequest(BaseModel):
 
 @app.post("/api/support/message")
 def handle_message(request: MessageRequest, db: Session = Depends(get_db)):
-    """
-    处理客户消息 — 执行 LangGraph 多Agent工作流。
-
-    返回内容包含：
-    - response: 最终回复
-    - agents_used: 参与的Agent列表
-    - metadata: 意图/情感/优先级/QA得分/检索文档等
-    - trace: 完整执行轨迹（可用于前端可视化工作流）
-    """
+    """执行支持工作流并返回回复、处理元数据和执行轨迹。"""
     try:
         service = get_support_service()
         return service.handle_customer_message(
@@ -243,9 +216,6 @@ def create_ticket_and_start_conversation(
     except Exception as exc:
         db.rollback()
         raise _support_http_exception(exc) from exc
-
-
-# ===== 前端页面 =====
 
 
 @app.get("/chat", response_class=HTMLResponse)
