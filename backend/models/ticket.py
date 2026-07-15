@@ -1,6 +1,4 @@
-"""
-工单数据模型（沿用原项目设计，与Agent框架无关）。
-"""
+"""工单状态、优先级和持久化模型。"""
 
 from datetime import datetime
 from enum import Enum

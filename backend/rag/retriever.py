@@ -1,13 +1,4 @@
-"""
-知识库检索器 — 可插拔接口设计。
-
-默认实现：BM25 关键词检索（零重依赖，开箱即用，中文用jieba分词）。
-升级路径：实现 BaseRetriever 接口，替换为 FAISS + Embedding 向量检索
-         （接口已预留，见 VectorRetriever 骨架）。
-
-面试要点：BM25 是稀疏检索的经典算法（TF-IDF的改进），
-向量检索是稠密检索；生产系统常用两者混合（hybrid search）+ rerank。
-"""
+"""可插拔知识库检索器，默认使用 jieba 分词和 BM25。"""
 
 import json
 import math
@@ -114,10 +105,6 @@ class VectorRetriever(BaseRetriever):
     def search(self, query: str, top_k: int = 3) -> List[Dict[str, str]]:
         raise NotImplementedError
 
-
-# ---------------------------------------------------------------------------
-# 全局单例
-# ---------------------------------------------------------------------------
 
 _retriever: BaseRetriever | None = None
 

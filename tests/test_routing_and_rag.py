@@ -1,14 +1,5 @@
-"""
-路由逻辑与RAG检索的单元测试 — 不需要API Key，不依赖langgraph。
-
-运行：pytest tests/ -v
-"""
-
 from backend.graph.routing import route_after_qa, route_to_agent
 from backend.rag.retriever import BM25Retriever
-
-# ===== 智能路由测试 =====
-
 
 def test_route_technical_intent():
     state = {"intent": "technical", "predicted_priority": "medium", "sentiment": "neutral"}
@@ -35,9 +26,6 @@ def test_route_general_to_support():
     assert route_to_agent(state) == "support_agent"
 
 
-# ===== QA重试循环测试 =====
-
-
 def test_qa_pass_goes_to_finalize():
     state = {"qa_score": 8.5, "retry_count": 0, "handled_by": "support_agent"}
     assert route_after_qa(state) == "finalize"
@@ -51,9 +39,6 @@ def test_qa_fail_retries_same_agent():
 def test_qa_fail_but_max_retries_exceeded():
     state = {"qa_score": 5.0, "retry_count": 99, "handled_by": "support_agent"}
     assert route_after_qa(state) == "finalize"
-
-
-# ===== BM25检索测试 =====
 
 
 DOCS = [

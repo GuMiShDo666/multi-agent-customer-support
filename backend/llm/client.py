@@ -1,8 +1,5 @@
 """
-LLM 客户端 — OpenAI 兼容接口，支持 DeepSeek / 通义千问 / Kimi / OpenAI 等。
-
-国产大模型基本都提供 OpenAI 兼容的 API 格式，因此统一用 langchain-openai 的
-ChatOpenAI，通过 base_url 切换提供商，无需改代码。
+使用 ChatOpenAI 连接 OpenAI 兼容接口，通过 base_url 切换提供商。
 
 配置方式（.env）:
     LLM_API_KEY=sk-xxx

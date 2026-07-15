@@ -1,6 +1,4 @@
-"""
-对话管理服务（沿用原项目设计，消息支持Agent执行元数据）。
-"""
+"""对话和消息的持久化服务。"""
 
 from datetime import datetime
 from typing import List, Optional

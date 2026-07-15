@@ -1,6 +1,4 @@
-"""
-对话与消息数据模型（沿用原项目设计，扩展了Agent执行元数据字段）。
-"""
+"""对话、消息及Agent执行元数据模型。"""
 
 from datetime import datetime
 from typing import List, Optional
@@ -34,7 +32,7 @@ class MessageDB(Base):
     role = Column(String)  # "user" / "assistant"
     content = Column(Text)
     agent_name = Column(String, nullable=True)
-    # ===== LangGraph版扩展：执行元数据（可观测性）=====
+    # 用于追踪路由结果和回复质量
     intent = Column(String, nullable=True)       # 意图分类结果
     sentiment = Column(String, nullable=True)    # 情感分析结果
     qa_score = Column(Float, nullable=True)      # QA质检得分

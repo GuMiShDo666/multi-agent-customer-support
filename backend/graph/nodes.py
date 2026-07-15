@@ -1,18 +1,4 @@
-"""
-LangGraph 工作流节点实现。
-
-节点清单：
-  intake                 — 输入预处理
-  classify_intent        — LLM意图分类 + 情感分析 + 优先级预测（结构化输出）
-  retrieve_knowledge     — RAG知识库检索
-  support_agent          — 一线客服Agent
-  technical_agent        — 技术专家Agent
-  escalation_agent       — 升级协调Agent（综合技术分析给出最终答复）
-  qa_check               — QA质检打分，不达标触发重试循环
-  finalize               — 输出整理
-
-每个节点都是纯函数：接收 SupportState，返回增量更新 dict（由LangGraph合并）。
-"""
+"""客服工作流的分类、检索、处理、质检和输出节点。"""
 
 import json
 from typing import Any, Dict, Literal
@@ -24,11 +10,6 @@ from ..config import QA_THRESHOLD, RAG_TOP_K
 from ..llm import create_llm
 from ..rag import get_retriever
 from .state import SupportState
-
-# ---------------------------------------------------------------------------
-# 工具函数
-# ---------------------------------------------------------------------------
-
 
 class IntentClassification(BaseModel):
     intent: Literal["general", "technical", "billing", "complaint"]
@@ -79,11 +60,6 @@ def _format_docs(state: SupportState) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# 节点实现
-# ---------------------------------------------------------------------------
-
-
 def intake(state: SupportState) -> Dict[str, Any]:
     """输入预处理：初始化计数器和轨迹。"""
     return {
@@ -94,12 +70,7 @@ def intake(state: SupportState) -> Dict[str, Any]:
 
 
 def classify_intent(state: SupportState) -> Dict[str, Any]:
-    """
-    意图分类节点 — 用LLM做结构化分类（替代原项目的关键词匹配）。
-
-    输出：意图类别、置信度、情感、预测优先级。
-    这是智能路由的依据，是相对原CrewAI版本的核心改进之一。
-    """
+    """生成意图、置信度、情感和预测优先级。"""
     llm = create_llm(temperature=0.0)  # 分类任务用确定性输出
 
     prompt = f"""你是客服系统的意图分类器。分析以下客户消息，输出JSON（不要输出其他内容）：
@@ -170,9 +141,6 @@ def retrieve_knowledge(state: SupportState) -> Dict[str, Any]:
         "retrieved_docs": docs,
         "trace": [f"[retrieve_knowledge] 检索到 {len(docs)} 条知识库文档"],
     }
-
-
-# ----- 三个业务Agent节点 -----
 
 
 def support_agent(state: SupportState) -> Dict[str, Any]:
@@ -260,15 +228,9 @@ def technical_agent(state: SupportState) -> Dict[str, Any]:
 
 
 def escalation_agent(state: SupportState) -> Dict[str, Any]:
-    """
-    升级协调Agent：处理高优先级问题。
-
-    多Agent协同体现：先调用技术Agent的分析能力生成内部诊断，
-    再以升级经理身份综合诊断结果、安抚客户、给出解决方案和跟进承诺。
-    """
+    """先生成内部技术诊断，再据此生成高优先级客户答复。"""
     llm = create_llm(temperature=0.5)
 
-    # 第一步：内部技术诊断（Agent间协作）
     diag_llm = create_llm(temperature=0.2)
     diag_result = diag_llm.invoke(
         [
@@ -287,7 +249,6 @@ def escalation_agent(state: SupportState) -> Dict[str, Any]:
         else ""
     )
 
-    # 第二步：升级经理综合答复
     messages = [
         SystemMessage(
             content="""你是客服升级经理，负责处理高优先级/紧急工单。
@@ -323,11 +284,7 @@ def escalation_agent(state: SupportState) -> Dict[str, Any]:
 
 
 def qa_check(state: SupportState) -> Dict[str, Any]:
-    """
-    QA质检节点：对候选回复打分（0-10），不达标则给出改进意见触发重试。
-
-    这是LangGraph循环能力的体现：qa_check → (不达标) → 回到生成节点重试。
-    """
+    """对候选回复打分，并为未达标回复提供重试反馈。"""
     llm = create_llm(temperature=0.0)
 
     prompt = f"""你是客服质检专员。评估以下客服回复的质量，输出JSON（不要输出其他内容）：
